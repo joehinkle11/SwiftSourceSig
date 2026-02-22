@@ -16,7 +16,7 @@
 ## Install
 
 ```swift
-.package(url: "https://github.com/your-org/SwiftSourceSig.git", from: "0.1.0")
+.package(url: "https://github.com/joehinkle11/SwiftSourceSig.git", from: "1.0.0")
 // target: .product(name: "SwiftSourceSig"), plugins: [.plugin(name: "SwiftSourceSigLintBuildTool")]
 ```
 
