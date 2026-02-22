@@ -175,7 +175,14 @@ struct ParsedCode {
     
     func toString() throws(SwiftSourceSigError) -> String {
         var render = ""
-        if sections.contains(where: { if case .manualPlaceholder = $0 { return true }; return false }) {
+        if sections.contains(where: {
+            if case .manualPlaceholder = $0 {
+                return true
+            } else if case .manual = $0 {
+                return true
+            }
+            return false
+        }) {
             render.append(SwiftSourceSig.startingHeaderWhenManualSectionsArePresent)
         } else {
             render.append(SwiftSourceSig.startingHeader)
