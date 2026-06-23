@@ -39,7 +39,7 @@ public enum SwiftSourceSig {
         let parsed = try ParsedCode(code: code)
         for section in parsed.sections {
            switch section {
-           case .generated(let codeHash, let code, let loc):
+           case .generated(let codeHash, let code, let loc, _, _):
                 let digest = SHA512.hash(data: Data(code.utf8))
                 let hashStr = String(digest.map { String(format: "%02x", $0) }.joined().prefix(16))
                 if hashStr != codeHash {
@@ -59,13 +59,17 @@ struct ParsedCode {
         case generated(
             codeHash: String,
             code: String,
-            loc: Int
+            loc: Int,
+            startIndent: String = "",
+            endIndent: String = ""
         )
         case manual(
             manualSectionName: String,
-            code: String
+            code: String,
+            startIndent: String = "",
+            endIndent: String = ""
         )
-        case unsignedGenerated(code: String)
+        case unsignedGenerated(code: String, startIndent: String = "", endIndent: String = "")
         case manualPlaceholder(manualSectionName: String)
     }
     
@@ -94,22 +98,26 @@ struct ParsedCode {
         let generatedEnd = "// @generated-section-end "
         let manualStart = "// @manual-section-start "
         let manualEnd = "// @manual-section-end "
-        let manualPlaceholder = "@manual-section-placeholder "
+        let manualPlaceholderComment = "// @manual-section-placeholder "
+        let manualPlaceholderBare = "@manual-section-placeholder "
 
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix(generatedStart) {
+                let startIndent = String(line.line.prefix(while: { $0.isWhitespace }))
                 let hash = String(trimmed.dropFirst(generatedStart.count)).trimmingCharacters(in: .whitespaces)
                 i += 1
                 var codeLines: [String] = []
+                var endIndent: String = ""
                 while i < lines.count {
                     let l = lines[i]
                     let t = l.line.trimmingCharacters(in: .whitespaces)
                     if t.hasPrefix(generatedEnd) {
                         let endHash = String(t.dropFirst(generatedEnd.count)).trimmingCharacters(in: .whitespaces)
                         if endHash == hash {
+                            endIndent = String(l.line.prefix(while: { $0.isWhitespace }))
                             i += 1
                             break
                         }
@@ -120,21 +128,26 @@ struct ParsedCode {
                 parsedSections.append(.generated(
                     codeHash: hash,
                     code: codeLines.joined(separator: "\n"),
-                    loc: line.loc + lineNumberExtra
+                    loc: line.loc + lineNumberExtra,
+                    startIndent: startIndent,
+                    endIndent: endIndent
                 ))
                 continue
             }
 
             if trimmed.hasPrefix(manualStart) {
+                let startIndent = String(line.line.prefix(while: { $0.isWhitespace }))
                 let name = String(trimmed.dropFirst(manualStart.count)).trimmingCharacters(in: .whitespaces)
                 i += 1
                 var codeLines: [String] = []
+                var endIndent: String = ""
                 while i < lines.count {
                     let l = lines[i]
                     let t = l.line.trimmingCharacters(in: .whitespaces)
                     if t.hasPrefix(manualEnd) {
                         let endName = String(t.dropFirst(manualEnd.count)).trimmingCharacters(in: .whitespaces)
                         if endName == name {
+                            endIndent = String(l.line.prefix(while: { $0.isWhitespace }))
                             i += 1
                             break
                         }
@@ -142,12 +155,18 @@ struct ParsedCode {
                     codeLines.append(l.line)
                     i += 1
                 }
-                parsedSections.append(.manual(manualSectionName: name, code: codeLines.joined(separator: "\n")))
+                parsedSections.append(.manual(manualSectionName: name, code: codeLines.joined(separator: "\n"), startIndent: startIndent, endIndent: endIndent))
                 continue
             }
 
-            if trimmed.hasPrefix(manualPlaceholder) {
-                let name = String(trimmed.dropFirst(manualPlaceholder.count)).trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix(manualPlaceholderComment) {
+                let name = String(trimmed.dropFirst(manualPlaceholderComment.count)).trimmingCharacters(in: .whitespaces)
+                parsedSections.append(.manualPlaceholder(manualSectionName: name))
+                i += 1
+                continue
+            }
+            if trimmed.hasPrefix(manualPlaceholderBare) {
+                let name = String(trimmed.dropFirst(manualPlaceholderBare.count)).trimmingCharacters(in: .whitespaces)
                 parsedSections.append(.manualPlaceholder(manualSectionName: name))
                 i += 1
                 continue
@@ -158,15 +177,24 @@ struct ParsedCode {
             while i < lines.count {
                 let l = lines[i]
                 let t = l.line.trimmingCharacters(in: .whitespaces)
-                if t.hasPrefix(generatedStart) || t.hasPrefix(manualStart) || t.hasPrefix(manualPlaceholder) {
+                if t.hasPrefix(generatedStart) || t.hasPrefix(manualStart) || t.hasPrefix(manualPlaceholderComment) || t.hasPrefix(manualPlaceholderBare) {
                     break
                 }
                 codeLines.append(l.line)
                 i += 1
             }
-            let block = codeLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            // Strip leading/trailing whitespace-only lines (but preserve indentation of content)
+            while codeLines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+                codeLines.removeFirst()
+            }
+            while codeLines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+                codeLines.removeLast()
+            }
+            let block = codeLines.joined(separator: "\n")
             if !block.isEmpty {
-                parsedSections.append(.unsignedGenerated(code: block))
+                let startIndent = String(codeLines.first?.prefix(while: { $0.isWhitespace }) ?? "")
+                let endIndent = String(codeLines.last?.prefix(while: { $0.isWhitespace }) ?? "")
+                parsedSections.append(.unsignedGenerated(code: block, startIndent: startIndent, endIndent: endIndent))
             }
         }
 
@@ -189,23 +217,23 @@ struct ParsedCode {
         }
         for section in sections {
             switch section {
-            case .generated(let codeHash, let code, _):
+            case .generated(let codeHash, let code, _, let startIndent, let endIndent):
                 render.append("\n")
-                render.append("// @generated-section-start \(codeHash)")
-                render.append("\n")
-                render.append(code)
-                render.append("\n")
-                render.append("// @generated-section-end \(codeHash)")
-                render.append("\n")
-            case .manual(let manualSectionName, let code):
-                render.append("\n")
-                render.append("// @manual-section-start \(manualSectionName)")
+                render.append("\(startIndent)// @generated-section-start \(codeHash)")
                 render.append("\n")
                 render.append(code)
                 render.append("\n")
-                render.append("// @manual-section-end \(manualSectionName)")
+                render.append("\(endIndent)// @generated-section-end \(codeHash)")
                 render.append("\n")
-            case .unsignedGenerated(let code):
+            case .manual(let manualSectionName, let code, let startIndent, let endIndent):
+                render.append("\n")
+                render.append("\(startIndent)// @manual-section-start \(manualSectionName)")
+                render.append("\n")
+                render.append(code)
+                render.append("\n")
+                render.append("\(endIndent)// @manual-section-end \(manualSectionName)")
+                render.append("\n")
+            case .unsignedGenerated(let code, _, _):
                 throw SwiftSourceSigError(message: "Unsigned generated code found '\(code.components(separatedBy: "\n").first(where: {$0.trimmingCharacters(in: .whitespacesAndNewlines).count > 0}) ?? "")'")
             case .manualPlaceholder(let manualSectionName):
                 render.append("\n")
@@ -227,26 +255,28 @@ struct ParsedCode {
         var result: [Section] = []
         for section in sections {
             switch section {
-            case .unsignedGenerated(let code):
+            case .unsignedGenerated(let code, let startIndent, let endIndent):
                 let digest = SHA512.hash(data: Data(code.utf8))
                 let hashStr = String(digest.map { String(format: "%02x", $0) }.joined().prefix(16))
-                result.append(.generated(codeHash: hashStr, code: code, loc: -1))
+                result.append(.generated(codeHash: hashStr, code: code, loc: -1, startIndent: startIndent, endIndent: endIndent))
             case .manualPlaceholder(let name):
                 guard let savedSection = saved.sections.first(where: {
-                    if case .manual(let n, _) = $0 { return n == name }
+                    if case .manual(let n, _, _, _) = $0 { return n == name }
                     return false
-                }), case .manual(_, let code) = savedSection else {
+                }), case .manual(_, let code, let savedStartIndent, let savedEndIndent) = savedSection else {
                     result.append(.manual(
                         manualSectionName: name,
-                        code: "// Write your code here"
+                        code: "// Write your code here",
+                        startIndent: "",
+                        endIndent: ""
                     ))
                     continue
                 }
-                result.append(.manual(manualSectionName: name, code: code))
-            case .generated(let codeHash, let code, let loc):
-                result.append(.generated(codeHash: codeHash, code: code, loc: loc))
-            case .manual(let manualSectionName, let code):
-                result.append(.manual(manualSectionName: manualSectionName, code: code))
+                result.append(.manual(manualSectionName: name, code: code, startIndent: savedStartIndent, endIndent: savedEndIndent))
+            case .generated(let codeHash, let code, let loc, let startIndent, let endIndent):
+                result.append(.generated(codeHash: codeHash, code: code, loc: loc, startIndent: startIndent, endIndent: endIndent))
+            case .manual(let manualSectionName, let code, let startIndent, let endIndent):
+                result.append(.manual(manualSectionName: manualSectionName, code: code, startIndent: startIndent, endIndent: endIndent))
             }
         }
         return ParsedCode(sections: result)
