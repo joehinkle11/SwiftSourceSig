@@ -18,8 +18,16 @@ let package = Package(
             targets: ["SwiftSourceSigLintBuildTool"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.15.0"),
+    ],
     targets: [
-        .target(name: "SwiftSourceSig"),
+        .target(
+            name: "SwiftSourceSig",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
+        ),
         .executableTarget(
             name: "SwiftSourceSigLint",
             dependencies: ["SwiftSourceSig"]
